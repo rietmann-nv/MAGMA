@@ -43,7 +43,7 @@ int main( int argc, char** argv)
     magmaDoubleComplex c_neg_one = MAGMA_Z_NEG_ONE;
     magma_int_t ione     = 1;
     magma_int_t ISEED[4] = {0,0,0,1};
-    double      work[1], Anorm, magma_err, magma_error;
+    double      work[1], Anorm, error, magma_error;
     magma_int_t status = 0;
     magmaDoubleComplex **h_A_array=NULL, **d_A_array = NULL;
     magma_int_t *dinfo_magma;
@@ -70,9 +70,9 @@ int main( int argc, char** argv)
     TESTING_CHECK( magma_malloc((void**)&d_A_array, batchCount * sizeof(magmaDoubleComplex*)) );
 
     h_lda = h_N;
-    printf("%%             max                                                                                        \n");
-    printf("%% BatchCount   N      CPU GFlop/s (ms)      MAGMA GFlop/s (ms)    ||R_magma - R_lapack||_F / ||R_lapack||_F\n");
-    printf("%%========================================================================================================\n");
+    printf("%%              max\n");
+    printf("%% BatchCount     N   CPU Gflop/s (ms)   MAGMA Gflop/s (ms)   ||R_magma - R_lapack||_F / ||R_lapack||_F\n");
+    printf("%%=====================================================================================================\n");
     for( int i = 0; i < opts.ntest; ++i ) {
         for( int iter = 0; iter < opts.niter; ++iter ) {
             srand(1000); // guarantee reproducible sizes
@@ -101,7 +101,9 @@ int main( int argc, char** argv)
                 h_A_tmp += h_N[s] * h_lda[s]; 
             }
             
-            h_A_tmp = h_A; h_R_tmp = h_R; d_A_tmp = d_A;
+            h_A_tmp = h_A;
+            h_R_tmp = h_R;
+            d_A_tmp = d_A;
             for(int s = 0; s < batchCount; s++){
                 lapackf77_zlacpy( MagmaFullStr, &h_N[s], &h_N[s], h_A_tmp, &h_lda[s], h_R_tmp, &h_lda[s] );
                 magma_zsetmatrix( h_N[s], h_N[s], h_A_tmp, h_lda[s], d_A_tmp, h_ldda[s], opts.queue );
@@ -117,6 +119,7 @@ int main( int argc, char** argv)
             magma_setvector(batchCount, sizeof(magmaDoubleComplex*), h_A_array, 1, d_A_array, 1, opts.queue);
             magma_setvector(batchCount, sizeof(magma_int_t), h_N, 1, d_N, 1, opts.queue);
             magma_setvector(batchCount, sizeof(magma_int_t), h_ldda, 1, d_ldda, 1, opts.queue);
+
             /* ====================================================================
                Performs operation using MAGMA
                =================================================================== */
@@ -169,42 +172,42 @@ int main( int argc, char** argv)
                 #endif
                 cpu_time = magma_wtime() - cpu_time;
                 cpu_perf = gflops / cpu_time;
+
                 /* =====================================================================
                    Check the result compared to LAPACK
                    =================================================================== */
-                h_R_tmp = h_R; d_A_tmp = d_A;
+                h_R_tmp = h_R;
+                d_A_tmp = d_A;
                 for(int s = 0; s < batchCount; s++){
                     magma_zgetmatrix(h_N[s], h_N[s], d_A_tmp, h_ldda[s], h_R_tmp, h_lda[s], opts.queue);
                     h_R_tmp += h_N[s] * h_lda[s]; 
                     d_A_tmp += h_N[s] * h_ldda[s];
                 }
                 magma_error = 0.0;
-                h_A_tmp = h_A; h_R_tmp = h_R;
+                h_A_tmp = h_A;
+                h_R_tmp = h_R;
                 for (int s=0; s < batchCount; s++)
                 {
                     magma_int_t Asize = h_lda[s] * h_N[s];
                     Anorm = lapackf77_zlanhe("f", lapack_uplo_const(opts.uplo), &h_N[s], h_A_tmp, &h_lda[s], work);
                     blasf77_zaxpy(&Asize, &c_neg_one, h_A_tmp, &ione, h_R_tmp, &ione);
-                    magma_err = lapackf77_zlanhe("f", lapack_uplo_const(opts.uplo), &h_N[s], h_R_tmp, &h_lda[s], work) / Anorm;
-                    if ( isnan(magma_err) || isinf(magma_err) ) {
-                        magma_error = magma_err;
-                        break;
-                    }
-                    magma_error = max( magma_error, magma_err );
+                    error = lapackf77_zlanhe("f", lapack_uplo_const(opts.uplo), &h_N[s], h_R_tmp, &h_lda[s], work) / Anorm;
+                    magma_error = magma_max_nan( magma_error, error );
+                    
                     h_A_tmp += h_N[s] * h_lda[s];
                     h_R_tmp += h_N[s] * h_lda[s];
                 }
                 bool okay = (magma_error < tol);
                 status += ! okay;
                 
-                printf("%5lld      %5lld    %7.2f ( %7.2f )     %7.2f ( %7.2f )     %8.2e   %s\n",
+                printf("  %10lld %5lld   %7.2f (%7.2f)   %7.2f (%7.2f)   %8.2e   %s\n",
                        (long long)batchCount, (long long)max_N, 
                        cpu_perf, cpu_time*1000.,  
                        gpu_perf, gpu_time*1000., 
                        magma_error,  (magma_error < tol ? "ok" : "failed"));
             }            
             else {
-                printf("%5lld      %5lld    ---   (  ---  )   %7.2f ( %7.2f )     ---  \n",
+                printf("  %10lld %5lld     ---   (  ---  )   %7.2f (%7.2f)     ---\n",
                        (long long)batchCount, (long long)max_N, 
                        gpu_perf, gpu_time*1000. );
             }
@@ -212,9 +215,11 @@ cleanup:
             magma_free_pinned( h_R );
             magma_free_cpu( h_A );
             magma_free( d_A );
-            if(status==-1) break;
+            if (status == -1)
+                break;
         }
-        if(status==-1) break;
+        if (status == -1)
+            break;
 
         if ( opts.niter > 1 ) {
             printf( "\n" );
